@@ -154,7 +154,7 @@
   <div class="card" id="progressCard" hidden>
     <ul class="steps" id="steps">
       <li data-step="decode">音声を取り出す</li>
-      <li data-step="model">AIモデルを読み込む(約180MB)</li>
+      <li data-step="model">AIモデルを読み込む</li>
       <li data-step="separate">BGMと声を分ける</li>
       <li data-step="video">動画にまとめ直す</li>
     </ul>
@@ -186,7 +186,7 @@
       <li>動画生成AIで自分が作った動画など、<b>使う権利を持っている素材</b>に使ってください。市販の曲や他の人の動画から音を抜き出す用途には使わないでください。</li>
       <li>AIで音を分けるしくみです。効果音の一部がBGMと一緒に消えたり、BGMが少し残ったりすることがあります。効果音を残したいときは「声と効果音を残す」を選んでください。</li>
       <li>処理の速さはお使いの機器しだいです。パソコンのChrome・Edgeがいちばん速く動きます。スマホでも使えますが、時間がかかったり、古い機種では途中で止まったりすることがあります。</li>
-      <li>AIモデル(約180MB)をダウンロードして使います。スマホではWi-Fiにつないで使ってください。</li>
+      <li>AIモデル(パソコンは約180MB、スマホは約96MB)をダウンロードして使います。スマホではWi-Fiにつないで使ってください。</li>
       <li>スマホでは、処理が終わるまで<b>ほかのアプリに切り替えたり画面を閉じたりしない</b>でください(止まることがあります)。</li>
       <li>短い動画向けです。15秒の動画で数十秒〜数分かかります。スマホでは30秒くらいまでの動画がおすすめです。</li>
     </ul>
@@ -203,7 +203,17 @@ const ORT_URL = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.30.0/dist/ort.we
 import { DemucsProcessor, CONSTANTS, stft, istft, reflectPad } from "./vendor/demucs-web/index.js";
 import { FFmpeg } from "./vendor/ffmpeg/index.js";
 
-const MODEL_URL = CONSTANTS.DEFAULT_MODEL_URL;
+// スマホはメモリが少ないので、軽くしたAIモデルを使う(音はほぼ同じ)。
+// GPUが使えるスマホは16bit版、使えないスマホは8bit版(GPUなしでも速く動く形)。?model=full|fp16|lite で切り替えて試せる
+const MODELS = {
+  full: { url: CONSTANTS.DEFAULT_MODEL_URL, size: "約180MB", gpu: true },
+  fp16: { url: new URL("models/htdemucs_fp16.onnx", location.href).href, size: "約92MB", gpu: true },
+  lite: { url: new URL("models/htdemucs_lite.onnx", location.href).href, size: "約96MB", gpu: false },
+};
+const IS_MOBILE = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+const MODEL = MODELS[new URLSearchParams(location.search).get("model")] || (IS_MOBILE ? (navigator.gpu ? MODELS.fp16 : MODELS.lite) : MODELS.full);
+const MODEL_URL = MODEL.url;
+const MODEL_SIZE = MODEL.size;
 const MODEL_CACHE = "bgm-remover-model-v1";
 const FFMPEG_CORE = "https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.10/dist/esm";
 const SR = CONSTANTS.SAMPLE_RATE;
@@ -241,6 +251,7 @@ drop.addEventListener("drop", (e) => {
 
 // スマホはメモリが足りなくなるとページを勝手に読み込み直す。どこで落ちたかを次に開いたとき伝えるため、今の段階を覚えておく
 const STEP_MARK = "bgm-remover-step";
+$("steps").querySelector('[data-step="model"]').textContent = `AIモデルを読み込む(${MODEL_SIZE})`;
 function mark(label) {
   try { label ? sessionStorage.setItem(STEP_MARK, label) : sessionStorage.removeItem(STEP_MARK); } catch {}
 }
@@ -314,12 +325,13 @@ async function loadProcessor() {
     onProgress: ({ progress: v, currentSegment, totalSegments }) =>
       progress(v, `分離中 ${currentSegment} / ${totalSegments}`),
   });
-  let p = make(navigator.gpu ? ["webgpu", "wasm"] : ["wasm"]);
+  const useGpu = !!navigator.gpu && MODEL.gpu;
+  let p = make(useGpu ? ["webgpu", "wasm"] : ["wasm"]);
   try {
     await p.loadModel(buf);
   } catch (e) {
     // スマホのGPUで準備に失敗することがあるので、GPUを使わない方法でやり直す
-    if (!navigator.gpu) throw e;
+    if (!useGpu) throw e;
     console.warn(e);
     progress(1, "GPUを使わない方法で準備しています…");
     p = make(["wasm"]);
