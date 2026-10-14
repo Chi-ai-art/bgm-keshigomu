@@ -298,16 +298,23 @@ async function fetchModel() {
     return buf;
   }
   // スマホのメモリを節約するため、受け取りながら1つの入れ物に直接詰める(コピーを何個も作らない)
-  const out = new Uint8Array(total);
+  // 圧縮して送られてくると Content-Length は圧縮後の大きさなので、足りなくなったら入れ物を広げる
+  let out = new Uint8Array(total);
   const reader = res.body.getReader();
   let loaded = 0;
   for (;;) {
     const { done, value } = await reader.read();
     if (done) break;
+    if (loaded + value.length > out.length) {
+      const bigger = new Uint8Array(Math.max(out.length * 1.5, loaded + value.length) | 0);
+      bigger.set(out.subarray(0, loaded));
+      out = bigger;
+    }
     out.set(value, loaded);
     loaded += value.length;
-    progress(loaded / total, `ダウンロード中 ${mb(loaded)} / ${mb(total)} MB`);
+    progress(Math.min(loaded / total, 1), `ダウンロード中 ${mb(loaded)} MB`);
   }
+  if (loaded !== out.length) out = out.slice(0, loaded);
   try { await cache?.put(MODEL_URL, new Response(out)); } catch {}
   return out.buffer;
 }
