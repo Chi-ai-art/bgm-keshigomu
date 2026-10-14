@@ -1,0 +1,478 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BGMけしゴム</title>
+<meta name="description" content="動画生成AIで作った動画に勝手についたBGMを取り除くツール。処理はすべてブラウザの中で行い、ファイルはどこにも送信しません。">
+<style>
+  :root {
+    --bg: #fbf8f3;
+    --card: #ffffff;
+    --ink: #2d2a26;
+    --sub: #6f6a62;
+    --line: #e8e1d6;
+    --accent: #e07a5f;
+    --accent-ink: #ffffff;
+    --soft: #fdf0ea;
+    --ok: #3d8b6e;
+    --warn-bg: #fff7e0;
+    --warn-line: #f0d48a;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #1d1b19;
+      --card: #272421;
+      --ink: #f1ece4;
+      --sub: #b3aca1;
+      --line: #3a3631;
+      --accent: #ec8e74;
+      --accent-ink: #1d1b19;
+      --soft: #33271f;
+      --ok: #6cc3a0;
+      --warn-bg: #332c18;
+      --warn-line: #6b5a26;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: "Hiragino Maru Gothic ProN", "Hiragino Sans", "Yu Gothic UI", "Meiryo", sans-serif;
+    line-height: 1.7;
+  }
+  main { max-width: 680px; margin: 0 auto; padding: 32px 16px 64px; }
+  h1 { font-size: 1.7rem; margin: 0 0 4px; letter-spacing: .02em; }
+  .lead { color: var(--sub); margin: 0 0 24px; }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    padding: 20px;
+    margin-bottom: 16px;
+  }
+  .drop {
+    border: 2px dashed var(--line);
+    border-radius: 14px;
+    padding: 36px 16px;
+    text-align: center;
+    cursor: pointer;
+    transition: background .15s, border-color .15s;
+  }
+  .drop:hover, .drop.over { background: var(--soft); border-color: var(--accent); }
+  .drop strong { display: block; font-size: 1.1rem; margin-bottom: 4px; }
+  .drop small { color: var(--sub); }
+  .drop input { display: none; }
+  .file-name { margin-top: 12px; font-weight: bold; word-break: break-all; }
+  button, .btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+    font: inherit; font-weight: bold;
+    border: none; border-radius: 999px;
+    padding: 12px 22px;
+    background: var(--accent); color: var(--accent-ink);
+    cursor: pointer; text-decoration: none;
+  }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  .btn.ghost { background: transparent; color: var(--ink); border: 1px solid var(--line); }
+  .start { width: 100%; margin-top: 16px; font-size: 1.05rem; }
+  .mode { border: none; padding: 0; margin: 16px 0 0; }
+  .mode legend { font-weight: bold; padding: 0; margin-bottom: 6px; }
+  .mode label {
+    display: flex; gap: 10px; align-items: flex-start;
+    border: 1px solid var(--line); border-radius: 12px;
+    padding: 10px 14px; margin-bottom: 8px; cursor: pointer;
+  }
+  .mode label:has(input:checked) { border-color: var(--accent); background: var(--soft); }
+  .mode input { margin-top: 6px; accent-color: var(--accent); }
+  .mode small { display: block; color: var(--sub); }
+  .steps { list-style: none; padding: 0; margin: 0; }
+  .steps li { padding: 6px 0; color: var(--sub); }
+  .steps li.active { color: var(--ink); font-weight: bold; }
+  .steps li.done { color: var(--ok); }
+  .steps li::before { content: "○ "; }
+  .steps li.active::before { content: "▶ "; }
+  .steps li.done::before { content: "✓ "; }
+  progress { width: 100%; height: 10px; accent-color: var(--accent); margin-top: 8px; }
+  .status { color: var(--sub); font-size: .9rem; min-height: 1.5em; }
+  .result h2 { font-size: 1.15rem; margin: 0 0 12px; }
+  .result video { width: 100%; border-radius: 10px; background: #000; }
+  .result audio { width: 100%; margin: 4px 0 8px; }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0 16px; }
+  .label { font-weight: bold; margin-top: 8px; }
+  .notice {
+    background: var(--warn-bg);
+    border: 1px solid var(--warn-line);
+    border-radius: 12px;
+    padding: 14px 16px;
+    font-size: .92rem;
+  }
+  .notice ul { margin: 6px 0 0; padding-left: 1.2em; }
+  .error { color: #c0392b; font-weight: bold; white-space: pre-wrap; }
+  footer { color: var(--sub); font-size: .8rem; text-align: center; margin-top: 32px; }
+  footer a { color: inherit; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<main>
+  <h1>BGMけしゴム</h1>
+  <p class="lead">動画生成AIで作った動画に勝手についたBGMを消して、声と効果音だけを残します。<br>処理はすべてこのブラウザの中で行い、ファイルはどこにも送信しません。</p>
+
+  <div class="card">
+    <label class="drop" id="drop">
+      <strong>タップして動画(または音声)を選ぶ</strong>
+      <small>パソコンならここにドロップもできます(mp4・mov・webm・mp3・wav など)</small>
+      <input type="file" id="file" accept="video/*,audio/*">
+      <div class="file-name" id="fileName"></div>
+    </label>
+    <fieldset class="mode">
+      <legend>残す音</legend>
+      <label>
+        <input type="radio" name="mode" value="voice" checked>
+        <span>声だけ残す<small>セリフ・ナレーションの動画向け。BGMがいちばんきれいに消えます</small></span>
+      </label>
+      <label>
+        <input type="radio" name="mode" value="se">
+        <span>声と効果音を残す<small>鉛筆のしゅしゅっ・足音・ドンなどの音も残します。BGMが少し残ることがあります</small></span>
+      </label>
+    </fieldset>
+    <button class="start" id="start" disabled>BGMを消す</button>
+  </div>
+
+  <div class="card" id="progressCard" hidden>
+    <ul class="steps" id="steps">
+      <li data-step="decode">音声を取り出す</li>
+      <li data-step="model">AIモデルを読み込む(初回のみ約180MBをダウンロード)</li>
+      <li data-step="separate">BGMと声を分ける</li>
+      <li data-step="video">動画にまとめ直す</li>
+    </ul>
+    <progress id="bar" max="1" value="0"></progress>
+    <div class="status" id="status"></div>
+    <div class="error" id="error"></div>
+  </div>
+
+  <div class="card result" id="result" hidden>
+    <h2>できました</h2>
+    <div id="videoBox" hidden>
+      <video id="outVideo" controls playsinline></video>
+      <div class="row"><a class="btn" id="dlVideo">BGMを消した動画を保存</a></div>
+    </div>
+    <div class="label">BGMを消した音声</div>
+    <audio id="outVoice" controls></audio>
+    <div class="row"><a class="btn ghost" id="dlVoice">音声を保存(WAV)</a></div>
+    <div class="label">取り除いたBGM</div>
+    <audio id="outBgm" controls></audio>
+    <div class="row"><a class="btn ghost" id="dlBgm">BGMを保存(WAV)</a></div>
+  </div>
+
+  <div class="notice">
+    <strong>ご利用にあたって</strong>
+    <ul>
+      <li>動画生成AIで自分が作った動画など、<b>使う権利を持っている素材</b>に使ってください。市販の曲や他の人の動画から音を抜き出す用途には使わないでください。</li>
+      <li>AIで音を分けるしくみです。効果音の一部がBGMと一緒に消えたり、BGMが少し残ったりすることがあります。効果音を残したいときは「声と効果音を残す」を選んでください。</li>
+      <li>処理の速さはお使いの機器しだいです。パソコンのChrome・Edgeがいちばん速く動きます。スマホでも使えますが、時間がかかったり、古い機種では途中で止まったりすることがあります。</li>
+      <li>初回はAIモデル(約180MB)をダウンロードします。スマホではWi-Fiにつないで使ってください。</li>
+      <li>短い動画向けです。15秒の動画で数十秒〜数分かかります。</li>
+    </ul>
+  </div>
+
+  <footer>
+    分離AI: <a href="https://github.com/facebookresearch/demucs" target="_blank" rel="noopener">Demucs</a>(<a href="https://github.com/timcsy/demucs-web" target="_blank" rel="noopener">demucs-web</a>)/ 動画処理: <a href="https://ffmpegwasm.netlify.app/" target="_blank" rel="noopener">ffmpeg.wasm</a>
+  </footer>
+</main>
+
+<script type="module">
+import * as ort from "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.30.0/dist/ort.webgpu.min.mjs";
+import { DemucsProcessor, CONSTANTS, stft, istft, reflectPad } from "./vendor/demucs-web/index.js";
+import { FFmpeg } from "./vendor/ffmpeg/index.js";
+
+const MODEL_URL = CONSTANTS.DEFAULT_MODEL_URL;
+const MODEL_CACHE = "bgm-remover-model-v1";
+const FFMPEG_CORE = "https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.10/dist/esm";
+const SR = CONSTANTS.SAMPLE_RATE;
+
+const $ = (id) => document.getElementById(id);
+const drop = $("drop"), fileInput = $("file"), startBtn = $("start");
+let currentFile = null;
+let processor = null;
+let ffmpeg = null;
+const urls = [];
+
+function setFile(f) {
+  if (!f) return;
+  currentFile = f;
+  $("fileName").textContent = f.name;
+  startBtn.disabled = false;
+}
+fileInput.addEventListener("change", () => setFile(fileInput.files[0]));
+drop.addEventListener("dragover", (e) => { e.preventDefault(); drop.classList.add("over"); });
+drop.addEventListener("dragleave", () => drop.classList.remove("over"));
+drop.addEventListener("drop", (e) => {
+  e.preventDefault();
+  drop.classList.remove("over");
+  setFile(e.dataTransfer.files[0]);
+});
+
+function step(name) {
+  let passed = true;
+  for (const li of $("steps").children) {
+    li.classList.remove("active", "done");
+    if (li.dataset.step === name) { li.classList.add("active"); passed = false; }
+    else if (passed) li.classList.add("done");
+  }
+  $("bar").removeAttribute("value");
+}
+function progress(v, text) {
+  $("bar").value = v;
+  if (text !== undefined) $("status").textContent = text;
+}
+const mb = (n) => (n / 1024 / 1024).toFixed(0);
+
+async function fetchModel() {
+  let cache = null;
+  try { cache = await caches.open(MODEL_CACHE); } catch {}
+  const hit = cache && await cache.match(MODEL_URL);
+  if (hit) {
+    progress(1, "保存済みのAIモデルを使います");
+    return await hit.arrayBuffer();
+  }
+  const res = await fetch(MODEL_URL);
+  if (!res.ok) throw new Error(`AIモデルをダウンロードできませんでした(${res.status})`);
+  const total = Number(res.headers.get("Content-Length")) || 0;
+  const reader = res.body.getReader();
+  const chunks = [];
+  let loaded = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    loaded += value.length;
+    if (total) progress(loaded / total, `ダウンロード中 ${mb(loaded)} / ${mb(total)} MB`);
+  }
+  const blob = new Blob(chunks);
+  try { await cache?.put(MODEL_URL, new Response(blob)); } catch {}
+  return await blob.arrayBuffer();
+}
+
+async function loadProcessor() {
+  if (processor) return processor;
+  const buf = await fetchModel();
+  progress(1, "AIモデルを準備しています…");
+  const p = new DemucsProcessor({
+    ort,
+    sessionOptions: { executionProviders: navigator.gpu ? ["webgpu", "wasm"] : ["wasm"] },
+    onProgress: ({ progress: v, currentSegment, totalSegments }) =>
+      progress(v, `分離中 ${currentSegment} / ${totalSegments}`),
+  });
+  await p.loadModel(buf);
+  processor = p;
+  return p;
+}
+
+async function decodeAudio(file) {
+  const ctx = new AudioContext({ sampleRate: SR });
+  try {
+    const audio = await ctx.decodeAudioData(await file.arrayBuffer());
+    const left = audio.getChannelData(0);
+    const right = audio.numberOfChannels > 1 ? audio.getChannelData(1) : left;
+    return { left: new Float32Array(left), right: new Float32Array(right) };
+  } catch {
+    throw new Error("このファイルから音声を取り出せませんでした。音声が入っていないか、対応していない形式の可能性があります。");
+  } finally {
+    ctx.close();
+  }
+}
+
+function toWav(left, right) {
+  const n = left.length;
+  const buf = new ArrayBuffer(44 + n * 4);
+  const v = new DataView(buf);
+  const str = (o, s) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
+  str(0, "RIFF"); v.setUint32(4, 36 + n * 4, true); str(8, "WAVE");
+  str(12, "fmt "); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 2, true);
+  v.setUint32(24, SR, true); v.setUint32(28, SR * 4, true); v.setUint16(32, 4, true); v.setUint16(34, 16, true);
+  str(36, "data"); v.setUint32(40, n * 4, true);
+  let o = 44;
+  for (let i = 0; i < n; i++) {
+    for (const ch of [left, right]) {
+      const s = Math.max(-1, Math.min(1, ch[i]));
+      v.setInt16(o, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+      o += 2;
+    }
+  }
+  return new Blob([buf], { type: "audio/wav" });
+}
+
+// BGMの「その他」トラックから、こすれる・叩くような音(鉛筆・足音など)だけを取り出す。
+// 時間方向に伸びる音(メロディ)と周波数方向に広がる音(打撃・ノイズ)をメディアンフィルタで分けるHPSS。
+const nextTick = () => new Promise((r) => setTimeout(r));
+function median(win, k) {
+  for (let i = 1; i < k; i++) {
+    const x = win[i];
+    let j = i - 1;
+    while (j >= 0 && win[j] > x) { win[j + 1] = win[j]; j--; }
+    win[j + 1] = x;
+  }
+  return win[k >> 1];
+}
+async function percussivePart(left, right) {
+  const N = 2048, H = 512, K = 17, h = K >> 1, n = left.length;
+  const specs = [left, right].map((s) => stft(reflectPad(s, N / 2, N), N, H));
+  const { numFrames: T, numBins: B } = specs[0];
+  const mag = new Float32Array(T * B);
+  for (const s of specs) for (let i = 0; i < mag.length; i++) mag[i] += Math.hypot(s.real[i], s.imag[i]);
+  const harm = new Float32Array(T * B), perc = new Float32Array(T * B), win = new Float32Array(K);
+  for (let b = 0; b < B; b++) {
+    for (let t = 0; t < T; t++) {
+      for (let j = 0; j < K; j++) win[j] = mag[Math.min(T - 1, Math.max(0, t + j - h)) * B + b];
+      harm[t * B + b] = median(win, K);
+    }
+    if (b % 128 === 0) await nextTick();
+  }
+  for (let t = 0; t < T; t++) {
+    const o = t * B;
+    for (let b = 0; b < B; b++) {
+      for (let j = 0; j < K; j++) win[j] = mag[o + Math.min(B - 1, Math.max(0, b + j - h))];
+      perc[o + b] = median(win, K);
+    }
+    if (t % 256 === 0) await nextTick();
+  }
+  for (let i = 0; i < mag.length; i++) {
+    const p = perc[i] * perc[i], m = p / (p + harm[i] * harm[i] + 1e-12);
+    for (const s of specs) { s.real[i] *= m; s.imag[i] *= m; }
+  }
+  return specs.map((s) => istft(s.real, s.imag, T, B, N, H, n + N * 1.5).slice(N / 2, N / 2 + n));
+}
+
+// 効果音だけにすると全体の音が小さくなるので、ピークに合わせて持ち上げる(最大10倍)
+function normalize(l, r) {
+  let peak = 0;
+  for (let i = 0; i < l.length; i++) peak = Math.max(peak, Math.abs(l[i]), Math.abs(r[i]));
+  const g = peak > 0 ? Math.min(10, 0.89 / peak) : 1;
+  for (let i = 0; i < l.length; i++) { l[i] *= g; r[i] *= g; }
+}
+
+async function blobURL(url, type) {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`動画処理の部品を読み込めませんでした(${res.status})`);
+  return URL.createObjectURL(new Blob([await res.arrayBuffer()], { type }));
+}
+
+async function loadFFmpeg() {
+  if (ffmpeg) return ffmpeg;
+  const f = new FFmpeg();
+  f.on("progress", ({ progress: v }) => progress(Math.min(Math.max(v, 0), 1), "動画にまとめ直しています…"));
+  progress(0, "動画処理の部品を読み込んでいます(約30MB)…");
+  await f.load({
+    coreURL: await blobURL(`${FFMPEG_CORE}/ffmpeg-core.js`, "text/javascript"),
+    wasmURL: await blobURL(`${FFMPEG_CORE}/ffmpeg-core.wasm`, "application/wasm"),
+  });
+  ffmpeg = f;
+  return f;
+}
+
+async function remux(file, voiceWav) {
+  const f = await loadFFmpeg();
+  const ext = (file.name.match(/\.[^.]+$/) || [".mp4"])[0].toLowerCase();
+  const input = "input" + ext;
+  await f.writeFile(input, new Uint8Array(await file.arrayBuffer()));
+  await f.writeFile("voice.wav", new Uint8Array(await voiceWav.arrayBuffer()));
+  const code = await f.exec([
+    "-i", input, "-i", "voice.wav",
+    "-map", "0:v:0", "-map", "1:a:0",
+    "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
+    "-shortest", "-movflags", "+faststart", "out.mp4",
+  ]);
+  if (code !== 0) throw new Error("動画にまとめ直せませんでした。音声のファイルは下から保存できます。");
+  const data = await f.readFile("out.mp4");
+  for (const name of [input, "voice.wav", "out.mp4"]) { try { await f.deleteFile(name); } catch {} }
+  return new Blob([data], { type: "video/mp4" });
+}
+
+function link(el, blob, name) {
+  const u = URL.createObjectURL(blob);
+  urls.push(u);
+  if (el.tagName === "A") { el.href = u; el.download = name; }
+  else el.src = u;
+}
+
+startBtn.addEventListener("click", async () => {
+  if (!currentFile) return;
+  const file = currentFile;
+  const base = file.name.replace(/\.[^.]+$/, "");
+  const isVideo = file.type.startsWith("video/") || /\.(mp4|mov|webm|m4v|mkv)$/i.test(file.name);
+  const keepSE = document.querySelector('input[name="mode"]:checked').value === "se";
+
+  startBtn.disabled = true;
+  urls.splice(0).forEach(URL.revokeObjectURL);
+  $("result").hidden = true;
+  $("progressCard").hidden = false;
+  $("error").textContent = "";
+  $("steps").querySelector('[data-step="video"]').hidden = !isVideo;
+
+  try {
+    step("decode");
+    progress(0, "");
+    const { left, right } = await decodeAudio(file);
+
+    step("model");
+    const p = await loadProcessor();
+
+    step("separate");
+    if (!navigator.gpu) progress(0, "このブラウザはGPUが使えないため、時間がかかります…");
+    const r = await p.separate(left, right);
+    const n = left.length;
+    const keepL = new Float32Array(r.vocals.left), keepR = new Float32Array(r.vocals.right);
+    const bgmL = new Float32Array(n), bgmR = new Float32Array(n);
+    if (keepSE) {
+      progress(0, "効果音を取り出しています…");
+      const [pl, pr] = await percussivePart(r.other.left, r.other.right);
+      for (let i = 0; i < n; i++) {
+        keepL[i] += r.drums.left[i] + pl[i];
+        keepR[i] += r.drums.right[i] + pr[i];
+        bgmL[i] = r.bass.left[i] + r.other.left[i] - pl[i];
+        bgmR[i] = r.bass.right[i] + r.other.right[i] - pr[i];
+      }
+      normalize(keepL, keepR);
+    } else {
+      for (let i = 0; i < n; i++) {
+        bgmL[i] = r.drums.left[i] + r.bass.left[i] + r.other.left[i];
+        bgmR[i] = r.drums.right[i] + r.bass.right[i] + r.other.right[i];
+      }
+    }
+    const voiceWav = toWav(keepL, keepR);
+    const bgmWav = toWav(bgmL, bgmR);
+    link($("outVoice"), voiceWav);
+    link($("dlVoice"), voiceWav, `${base}_BGMなし.wav`);
+    link($("outBgm"), bgmWav);
+    link($("dlBgm"), bgmWav, `${base}_BGMのみ.wav`);
+
+    $("videoBox").hidden = true;
+    if (isVideo) {
+      step("video");
+      try {
+        const mp4 = await remux(file, voiceWav);
+        link($("outVideo"), mp4);
+        link($("dlVideo"), mp4, `${base}_BGMなし.mp4`);
+        $("videoBox").hidden = false;
+      } catch (e) {
+        console.error(e);
+        $("error").textContent = e.message;
+      }
+    }
+
+    step("finished");
+    progress(1, "完了しました");
+    $("result").hidden = false;
+    $("result").scrollIntoView({ behavior: "smooth" });
+  } catch (e) {
+    console.error(e);
+    $("error").textContent = e.message || String(e);
+  } finally {
+    startBtn.disabled = false;
+  }
+});
+</script>
+</body>
+</html>
