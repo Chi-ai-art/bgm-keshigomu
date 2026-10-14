@@ -134,7 +134,18 @@
       </label>
       <label>
         <input type="radio" name="mode" value="se">
-        <span>声と効果音を残す<small>鉛筆のしゅしゅっ・足音・ドンなどの音も残します。BGMが少し残ることがあります</small></span>
+        <span>声と効果音を残す<small>鉛筆のしゅしゅっ・足音・ドンなどの音も残します</small></span>
+      </label>
+    </fieldset>
+    <fieldset class="mode">
+      <legend>消す強さ</legend>
+      <label>
+        <input type="radio" name="strength" value="normal" checked>
+        <span>ふつう<small>声や効果音をなるべくそのまま残します</small></span>
+      </label>
+      <label>
+        <input type="radio" name="strength" value="strong">
+        <span>強め<small>うっすら残るBGMまで消します。声や効果音が少し小さくなることがあります</small></span>
       </label>
     </fieldset>
     <button class="start" id="start" disabled>BGMを消す</button>
@@ -156,7 +167,10 @@
     <h2>できました</h2>
     <div id="videoBox" hidden>
       <video id="outVideo" controls playsinline></video>
-      <div class="row"><a class="btn" id="dlVideo">BGMを消した動画を保存</a></div>
+      <div class="row">
+        <a class="btn" id="dlVideo">BGMを消した動画を保存</a>
+        <button class="btn ghost" id="shareVideo" hidden>写真アプリなどに保存・共有</button>
+      </div>
     </div>
     <div class="label">BGMを消した音声</div>
     <audio id="outVoice" controls></audio>
@@ -173,7 +187,8 @@
       <li>AIで音を分けるしくみです。効果音の一部がBGMと一緒に消えたり、BGMが少し残ったりすることがあります。効果音を残したいときは「声と効果音を残す」を選んでください。</li>
       <li>処理の速さはお使いの機器しだいです。パソコンのChrome・Edgeがいちばん速く動きます。スマホでも使えますが、時間がかかったり、古い機種では途中で止まったりすることがあります。</li>
       <li>初回はAIモデル(約180MB)をダウンロードします。スマホではWi-Fiにつないで使ってください。</li>
-      <li>短い動画向けです。15秒の動画で数十秒〜数分かかります。</li>
+      <li>スマホでは、処理が終わるまで<b>ほかのアプリに切り替えたり画面を閉じたりしない</b>でください(止まることがあります)。</li>
+      <li>短い動画向けです。15秒の動画で数十秒〜数分かかります。スマホでは30秒くらいまでの動画がおすすめです。</li>
     </ul>
   </div>
 
@@ -316,9 +331,14 @@ function median(win, k) {
   }
   return win[k >> 1];
 }
-async function percussivePart(left, right) {
-  const N = 2048, H = 512, K = 17, h = K >> 1, n = left.length;
-  const specs = [left, right].map((s) => stft(reflectPad(s, N / 2, N), N, H));
+const N = 2048, H = 512;
+const toSpec = (s) => stft(reflectPad(s, N / 2, N), N, H);
+const fromSpec = (s, n) => istft(s.real, s.imag, s.numFrames, s.numBins, N, H, n + N * 1.5).slice(N / 2, N / 2 + n);
+
+// margin を大きくするほど、メロディっぽい音を効果音として拾いにくくなる
+async function percussivePart(left, right, margin) {
+  const K = 17, h = K >> 1, n = left.length;
+  const specs = [left, right].map(toSpec);
   const { numFrames: T, numBins: B } = specs[0];
   const mag = new Float32Array(T * B);
   for (const s of specs) for (let i = 0; i < mag.length; i++) mag[i] += Math.hypot(s.real[i], s.imag[i]);
@@ -339,10 +359,33 @@ async function percussivePart(left, right) {
     if (t % 256 === 0) await nextTick();
   }
   for (let i = 0; i < mag.length; i++) {
-    const p = perc[i] * perc[i], m = p / (p + harm[i] * harm[i] + 1e-12);
+    const p = perc[i] * perc[i], q = margin * harm[i], m = p / (p + q * q + 1e-12);
     for (const s of specs) { s.real[i] *= m; s.imag[i] *= m; }
   }
-  return specs.map((s) => istft(s.real, s.imag, T, B, N, H, n + N * 1.5).slice(N / 2, N / 2 + n));
+  return specs.map((s) => fromSpec(s, n));
+}
+
+// 仕上げ: 残す音にしみ出したBGMを、BGMのほうが強い時間・高さの部分だけ小さくする。
+// alpha を大きくするほど強く消す。
+async function suppressBleed(keepL, keepR, bgmL, bgmR, alpha) {
+  const n = keepL.length;
+  const ks = [keepL, keepR].map(toSpec);
+  await nextTick();
+  const bs = [bgmL, bgmR].map(toSpec);
+  await nextTick();
+  for (let i = 0; i < ks[0].real.length; i++) {
+    const k = Math.hypot(ks[0].real[i], ks[0].imag[i]) + Math.hypot(ks[1].real[i], ks[1].imag[i]);
+    const b = Math.hypot(bs[0].real[i], bs[0].imag[i]) + Math.hypot(bs[1].real[i], bs[1].imag[i]);
+    const m = (k * k) / (k * k + alpha * b * b + 1e-12);
+    for (const s of ks) { s.real[i] *= m; s.imag[i] *= m; }
+  }
+  await nextTick();
+  return ks.map((s) => fromSpec(s, n));
+}
+
+// 処理中にスマホの画面が消えると止まるので、終わるまで画面をつけておく
+async function keepAwake() {
+  try { return await navigator.wakeLock?.request("screen"); } catch { return null; }
 }
 
 // 効果音だけにすると全体の音が小さくなるので、ピークに合わせて持ち上げる(最大10倍)
@@ -403,8 +446,10 @@ startBtn.addEventListener("click", async () => {
   const base = file.name.replace(/\.[^.]+$/, "");
   const isVideo = file.type.startsWith("video/") || /\.(mp4|mov|webm|m4v|mkv)$/i.test(file.name);
   const keepSE = document.querySelector('input[name="mode"]:checked').value === "se";
+  const strong = document.querySelector('input[name="strength"]:checked').value === "strong";
 
   startBtn.disabled = true;
+  const lock = await keepAwake();
   urls.splice(0).forEach(URL.revokeObjectURL);
   $("result").hidden = true;
   $("progressCard").hidden = false;
@@ -427,21 +472,23 @@ startBtn.addEventListener("click", async () => {
     const bgmL = new Float32Array(n), bgmR = new Float32Array(n);
     if (keepSE) {
       progress(0, "効果音を取り出しています…");
-      const [pl, pr] = await percussivePart(r.other.left, r.other.right);
+      const [pl, pr] = await percussivePart(r.other.left, r.other.right, strong ? 3 : 2);
       for (let i = 0; i < n; i++) {
         keepL[i] += r.drums.left[i] + pl[i];
         keepR[i] += r.drums.right[i] + pr[i];
         bgmL[i] = r.bass.left[i] + r.other.left[i] - pl[i];
         bgmR[i] = r.bass.right[i] + r.other.right[i] - pr[i];
       }
-      normalize(keepL, keepR);
     } else {
       for (let i = 0; i < n; i++) {
         bgmL[i] = r.drums.left[i] + r.bass.left[i] + r.other.left[i];
         bgmR[i] = r.drums.right[i] + r.bass.right[i] + r.other.right[i];
       }
     }
-    const voiceWav = toWav(keepL, keepR);
+    progress(0, "残ったBGMを仕上げで消しています…");
+    const [outL, outR] = await suppressBleed(keepL, keepR, bgmL, bgmR, strong ? 4 : 1);
+    if (keepSE) normalize(outL, outR);
+    const voiceWav = toWav(outL, outR);
     const bgmWav = toWav(bgmL, bgmR);
     link($("outVoice"), voiceWav);
     link($("dlVoice"), voiceWav, `${base}_BGMなし.wav`);
@@ -455,6 +502,8 @@ startBtn.addEventListener("click", async () => {
         const mp4 = await remux(file, voiceWav);
         link($("outVideo"), mp4);
         link($("dlVideo"), mp4, `${base}_BGMなし.mp4`);
+        shareFile = new File([mp4], `${base}_BGMなし.mp4`, { type: "video/mp4" });
+        $("shareVideo").hidden = !navigator.canShare?.({ files: [shareFile] });
         $("videoBox").hidden = false;
       } catch (e) {
         console.error(e);
@@ -471,7 +520,14 @@ startBtn.addEventListener("click", async () => {
     $("error").textContent = e.message || String(e);
   } finally {
     startBtn.disabled = false;
+    lock?.release().catch(() => {});
   }
+});
+
+// スマホでは共有メニューから「ビデオを保存」で写真アプリに入れられる
+let shareFile = null;
+$("shareVideo").addEventListener("click", async () => {
+  try { await navigator.share({ files: [shareFile] }); } catch {}
 });
 </script>
 </body>
