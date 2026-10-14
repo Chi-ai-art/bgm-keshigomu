@@ -154,7 +154,7 @@
   <div class="card" id="progressCard" hidden>
     <ul class="steps" id="steps">
       <li data-step="decode">音声を取り出す</li>
-      <li data-step="model">AIモデルを読み込む(初回のみ約180MBをダウンロード)</li>
+      <li data-step="model">AIモデルを読み込む(約180MB)</li>
       <li data-step="separate">BGMと声を分ける</li>
       <li data-step="video">動画にまとめ直す</li>
     </ul>
@@ -186,7 +186,7 @@
       <li>動画生成AIで自分が作った動画など、<b>使う権利を持っている素材</b>に使ってください。市販の曲や他の人の動画から音を抜き出す用途には使わないでください。</li>
       <li>AIで音を分けるしくみです。効果音の一部がBGMと一緒に消えたり、BGMが少し残ったりすることがあります。効果音を残したいときは「声と効果音を残す」を選んでください。</li>
       <li>処理の速さはお使いの機器しだいです。パソコンのChrome・Edgeがいちばん速く動きます。スマホでも使えますが、時間がかかったり、古い機種では途中で止まったりすることがあります。</li>
-      <li>初回はAIモデル(約180MB)をダウンロードします。スマホではWi-Fiにつないで使ってください。</li>
+      <li>AIモデル(約180MB)をダウンロードして使います。スマホではWi-Fiにつないで使ってください。</li>
       <li>スマホでは、処理が終わるまで<b>ほかのアプリに切り替えたり画面を閉じたりしない</b>でください(止まることがあります)。</li>
       <li>短い動画向けです。15秒の動画で数十秒〜数分かかります。スマホでは30秒くらいまでの動画がおすすめです。</li>
     </ul>
@@ -198,7 +198,8 @@
 </main>
 
 <script type="module">
-import * as ort from "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.30.0/dist/ort.webgpu.min.mjs";
+// AIの実行部品はCDNから必要になったときに読み込む。ここで失敗しても、ファイル選択などの画面は動くようにするため
+const ORT_URL = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.30.0/dist/ort.webgpu.min.mjs";
 import { DemucsProcessor, CONSTANTS, stft, istft, reflectPad } from "./vendor/demucs-web/index.js";
 import { FFmpeg } from "./vendor/ffmpeg/index.js";
 
@@ -221,6 +222,15 @@ function setFile(f) {
   startBtn.disabled = false;
 }
 fileInput.addEventListener("change", () => setFile(fileInput.files[0]));
+
+// 思わぬエラーで止まったときも、画面に理由を出す(スマホでは開発者ツールが見られないため)
+function showError(e) {
+  $("progressCard").hidden = false;
+  $("error").textContent = "エラーが起きました: " + (e?.message || e);
+  startBtn.disabled = !currentFile;
+}
+window.addEventListener("error", (e) => showError(e.error || e.message));
+window.addEventListener("unhandledrejection", (e) => showError(e.reason));
 drop.addEventListener("dragover", (e) => { e.preventDefault(); drop.classList.add("over"); });
 drop.addEventListener("dragleave", () => drop.classList.remove("over"));
 drop.addEventListener("drop", (e) => {
@@ -266,21 +276,35 @@ async function fetchModel() {
     if (total) progress(loaded / total, `ダウンロード中 ${mb(loaded)} / ${mb(total)} MB`);
   }
   const blob = new Blob(chunks);
+  chunks.length = 0;
   try { await cache?.put(MODEL_URL, new Response(blob)); } catch {}
   return await blob.arrayBuffer();
 }
 
 async function loadProcessor() {
   if (processor) return processor;
+  let ort;
+  try { ort = await import(ORT_URL); }
+  catch { throw new Error("AIの部品を読み込めませんでした。通信状態を確認して、ページを再読み込みしてください。"); }
   const buf = await fetchModel();
   progress(1, "AIモデルを準備しています…");
-  const p = new DemucsProcessor({
+  const make = (providers) => new DemucsProcessor({
     ort,
-    sessionOptions: { executionProviders: navigator.gpu ? ["webgpu", "wasm"] : ["wasm"] },
+    sessionOptions: { executionProviders: providers },
     onProgress: ({ progress: v, currentSegment, totalSegments }) =>
       progress(v, `分離中 ${currentSegment} / ${totalSegments}`),
   });
-  await p.loadModel(buf);
+  let p = make(navigator.gpu ? ["webgpu", "wasm"] : ["wasm"]);
+  try {
+    await p.loadModel(buf);
+  } catch (e) {
+    // スマホのGPUで準備に失敗することがあるので、GPUを使わない方法でやり直す
+    if (!navigator.gpu) throw e;
+    console.warn(e);
+    progress(1, "GPUを使わない方法で準備しています…");
+    p = make(["wasm"]);
+    await p.loadModel(buf);
+  }
   processor = p;
   return p;
 }
