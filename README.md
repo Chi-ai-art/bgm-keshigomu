@@ -3,8 +3,13 @@
 動画生成AIで作った動画に勝手についたBGMを取り除くブラウザツール(HTML1枚・ビルド不要)。
 処理はすべてブラウザ内で行い、ファイルはどこにも送信しない。運営費0円の構成。
 
-- 状態: 未公開(ローカルのみ・リポジトリ未作成)
+- 公開URL: https://chi-ai-art.github.io/bgm-keshigomu/ (2026-10-14 公開。スマホでも使える)
+- リポジトリ: `Chi-ai-art/bgm-keshigomu`(**Public**。秘密は入っていない)。GitHub Pages、main への push で自動デプロイ
 - ローカル確認: `.claude/launch.json` の `bgm-remover`(ポート8770)
+
+## 残す音のモード
+- **声だけ残す**: vocals だけ。BGM = drums + bass + other
+- **声と効果音を残す**: vocals + drums + other から取り出したこすれ・打撃の音(HPSS、メディアン17)。そのあとピークに合わせて音量を上げる(最大10倍)。鉛筆の音・足音などはここで残る
 
 ## しくみ
 1. `AudioContext.decodeAudioData` で動画から音声を取り出す(44.1kHzに変換)
