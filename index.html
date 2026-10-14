@@ -239,7 +239,23 @@ drop.addEventListener("drop", (e) => {
   setFile(e.dataTransfer.files[0]);
 });
 
+// スマホはメモリが足りなくなるとページを勝手に読み込み直す。どこで落ちたかを次に開いたとき伝えるため、今の段階を覚えておく
+const STEP_MARK = "bgm-remover-step";
+function mark(label) {
+  try { label ? sessionStorage.setItem(STEP_MARK, label) : sessionStorage.removeItem(STEP_MARK); } catch {}
+}
+try {
+  const last = sessionStorage.getItem(STEP_MARK);
+  if (last) {
+    mark(null);
+    $("progressCard").hidden = false;
+    $("error").textContent = `前回は「${last}」の途中でページが読み込み直されました。スマホのメモリが足りなかった可能性があります。`;
+  }
+} catch {}
+
 function step(name) {
+  const li = $("steps").querySelector(`[data-step="${name}"]`);
+  mark(li ? li.textContent : null);
   let passed = true;
   for (const li of $("steps").children) {
     li.classList.remove("active", "done");
@@ -265,20 +281,24 @@ async function fetchModel() {
   const res = await fetch(MODEL_URL);
   if (!res.ok) throw new Error(`AIモデルをダウンロードできませんでした(${res.status})`);
   const total = Number(res.headers.get("Content-Length")) || 0;
+  if (!total) {
+    const buf = await res.arrayBuffer();
+    try { await cache?.put(MODEL_URL, new Response(buf.slice(0))); } catch {}
+    return buf;
+  }
+  // スマホのメモリを節約するため、受け取りながら1つの入れ物に直接詰める(コピーを何個も作らない)
+  const out = new Uint8Array(total);
   const reader = res.body.getReader();
-  const chunks = [];
   let loaded = 0;
   for (;;) {
     const { done, value } = await reader.read();
     if (done) break;
-    chunks.push(value);
+    out.set(value, loaded);
     loaded += value.length;
-    if (total) progress(loaded / total, `ダウンロード中 ${mb(loaded)} / ${mb(total)} MB`);
+    progress(loaded / total, `ダウンロード中 ${mb(loaded)} / ${mb(total)} MB`);
   }
-  const blob = new Blob(chunks);
-  chunks.length = 0;
-  try { await cache?.put(MODEL_URL, new Response(blob)); } catch {}
-  return await blob.arrayBuffer();
+  try { await cache?.put(MODEL_URL, new Response(out)); } catch {}
+  return out.buffer;
 }
 
 async function loadProcessor() {
@@ -543,6 +563,7 @@ startBtn.addEventListener("click", async () => {
     console.error(e);
     $("error").textContent = e.message || String(e);
   } finally {
+    mark(null);
     startBtn.disabled = false;
     lock?.release().catch(() => {});
   }
